@@ -1,0 +1,59 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"definitions": {
+		"git": {
+			"type": "object",
+			"properties": {
+				"uri": { "type": "string" }
+			},
+			"required": [ "uri" ]
+		},
+		"tar": {
+			"type": "object",
+			"properties": {
+				"uri": { "type": "string" }
+			},
+			"required": [ "uri" ]
+		},
+		"installation_mechanisms": {
+			"type": "object",
+			"properties": {
+				"git": { "$ref": "#/definitions/git" },
+				"tar": { "$ref": "#/definitions/tar" }
+			}
+		},
+		"dependency": {
+			"type": "object",
+			"properties": {
+				"meta-package": { "type": "string" },
+				"package-regex": { "type": "string" }
+			},
+			"required": [ "meta-package", "package-regex" ]
+		},
+		"package": {
+			"type": "object",
+			"properties": {
+				"description": { "type": "string" },
+				"dependencies": {
+					"type": "array", 
+					"items": { "$ref": "#/definitions/dependency" }
+				},
+				"installation_mechanisms": {
+					"$ref": "#/definitions/installation_mechanisms"
+				}
+			}
+		}
+	},
+	"title": "mcm meta-package configuration schema",
+	"type": "object",
+	"properties": {
+		"name": { "type": "string" },
+		"uri": { "type": "string" },
+		"description": { "type": "string" },
+		"version": { "type": "string" },
+		"packages": {
+			"type": "object",
+			"additionalProperties": { "$ref": "#/definitions/package" }
+		}
+	}
+}
