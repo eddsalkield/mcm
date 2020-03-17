@@ -77,12 +77,20 @@ class Mcm():
             if toml.load(file_dir)['name'] == meta_package_name:
                 return file_dir
         return None
+    
+    def _get_meta_package_by_name(self, meta_package_name):
+        for file_name in os.listdir(self.mcm_package_configs_dir):
+            file_dir = os.path.abspath(os.path.join(self.mcm_package_configs_dir, file_name))
+            t = toml.load(file_dir)
+            if t['name'] == meta_package_name:
+                return t
+        return None
 
     #               'package-name': {
     #                   'status': 'installed',
     #                   'path': '/package/path',
     #                   ...
-    # Statuses: ['loaded', 'midinstall', 'installed', 'midremove']
+    # Statuses: ['notloaded', 'loaded', 'midinstall', 'installed', 'midremove']
     def _get_package_cache(self, meta_package_name, package_name):
         joined_package_name = meta_package_name + '.' + package_name
         package_dir = os.path.join(self.mcm_package_packages_dir, joined_package_name)
@@ -92,7 +100,10 @@ class Mcm():
 
         else:
             with open(self.mcm_cache_file, 'r') as f:
-                cache = json.load(f)
+                try:
+                    cache = json.load(f)
+                except json.decoder.JSONDecodeError as e:
+                    raise Exception('Cache file seriously broken.  Run mcm cache-fix to repair.')
 
             try:
                 package_cache = cache[meta_package_name]['packages'][package_name]
@@ -104,33 +115,76 @@ class Mcm():
                     raise Exception('Invalid package status {} for package {}.{} - cache has been tampered with.  Run mcm cache-fix to repair.'.format(status, meta_package_name, package_name))
                 return package_cache
 
-    def _generate_scm_base_options(self):
+    def _invoke_scm_install(self, meta_package_name, package_name, target_dir=None, get_attributes_from_cache=False):
+        with open(self.mcm_cache_file, 'r') as f:
+            cache = json.load(f)
+        try:
+            cache[meta_package_name]
+        except KeyError:
+            cache[meta_package_name] = {'packages': {}}
+
+        joined_package_name = meta_package_name + '.' + package_name
+        package_dir = os.path.join(self.mcm_package_packages_dir, joined_package_name)
+
+        
+        if get_attributes_from_cache:
+            # Update the cache to midinstall status
+            package_cache = cache[meta_package_name]['packages'][package_name]
+            package_cache['status'] = 'midinstall'
+        else:
+            # The package is not installed at this point
+            if package_name in cache[meta_package_name]['packages'].keys():
+                raise Exception("Impossible - should only be invoked with uninstalled packages")
+
+            # Create a new package_cache
+            package_cache = {
+                'status': 'midinstall',
+                'package_dir': str(package_dir),
+                'packages_dir': str(self.mcm_package_packages_dir),
+                'tags': self.tags,
+                'hostname': self.hostname
+            }
+            if target_dir is None:
+                package_cache['target_dir'] = str(self.target_dir)
+            else:
+                package_cache['target_dir'] = str(target_dir)
+
+        # Write the cache back
+        cache[meta_package_name]['packages'][package_name] = package_cache
+        with open(self.mcm_cache_file, 'w+') as f:
+            json.dump(cache, f)
+
+        # (re)install with scm
         scm_options = [
             'scm', '-f', '-y',
-            '-t', self.target_dir,
-            '-d', self.mcm_package_packages_dir
+            '-t', package_cache['target_dir'],
+            '-d', package_cache['packages_dir']
             ]
 
-        if self.hostname is not None:
-            scm_options += ['-B', self.hostname]
+        if package_cache['hostname'] is not None:
+            scm_options += ['-B', package_cache['hostname']]
 
-        return scm_options
-
-    def _invoke_scm_install(self, package_names):
-        assert(isinstance(package_names, list))
-        scm_options = self._generate_scm_base_options()
-        for tag in self.tags:
+        for tag in package_cache['tags']:
             scm_options += ['-T', tag]
 
         scm_options.append('install')
-        for (meta_package_name, package_name) in package_names:
-            scm_options.append(meta_package_name + '.' + package_name)
+        scm_options.append(meta_package_name + '.' + package_name)
 
         logging.debug('Invoking {}'.format(scm_options))
         completed_process = subprocess.run(scm_options)
         if completed_process.returncode != 0:
             raise Exception('scm failed with error code {}'
                 .format(completed_process.returncode))
+
+        # Update the cache
+        package_cache['status'] = 'installed'
+        cache[meta_package_name]['packages'][package_name] = package_cache
+
+        if self.hostname is not None:
+            package_cache['hostname'] = self.hostname
+
+        with open(self.mcm_cache_file, 'w') as f:
+                json.dump(cache, f)
 
     def _invoke_scm_remove(self, meta_package_name, package_name):
         with open(self.mcm_cache_file, 'r') as f:
@@ -182,7 +236,9 @@ class Mcm():
         with open(self.mcm_cache_file, 'w') as f:
             json.dump(cache, f)
                 
-    def load(self, uri_list):
+    def load(self, uri_list, skip_if_loaded=True):
+        if not isinstance(uri_list, list):
+            uri_list = [uri_list]
         for uri in uri_list:
             logging.debug('Loading meta-package: {}'.format(uri))
 
@@ -194,17 +250,21 @@ class Mcm():
             meta_package_config = toml.loads(data.decode('utf-8'))
             file_name = meta_package_config['name']
             file_path = self._find_meta_package_by_name(file_name)
-            if file_path is not None:
+            if file_path is not None and skip_if_loaded:
                 logging.warning('Module {} already loaded.  Skipping.'.format(file_name))
                 continue
-            else:
-                # Get file name from url
-                file_name = str(os.path.basename(urlparse(uri).path))
-                file_path = os.path.join(self.mcm_package_configs_dir, file_name)
+
+            # Get file name from url
+            new_file_name = str(os.path.basename(urlparse(uri).path))
+            new_file_path = os.path.join(self.mcm_package_configs_dir, new_file_name)
 
             jsonschema.validate(meta_package_config, self.meta_package_config_schema)
 
-            with open(file_path, 'wb') as out_file:
+            # Remove the old file, if it exists
+            os.remove(file_path)
+
+            # Save new file
+            with open(new_file_path, 'wb') as out_file:
                 out_file.write(data)
 
             logging.debug('Loaded meta-package: {}'.format(uri))
@@ -219,33 +279,45 @@ class Mcm():
                 continue
            
             # Uninstall all associated packages
-            self.remove([(name, '.*')], package_must_exist=False)
+            self.remove([(name, '.*')], exit_if_not_installed=False)
 
             # Remove the meta-package itself
             os.remove(file_path)
 
     # package_list: [(meta_package_name, package_regex)]
     # load_only: if true, the package is loaded only and not installed
-    def install(self, package_list, load_only=False, exit_if_installed=True):
+    # if_installed in ['exit', 'skip', 'reinstall']
+    # Reinstall mode also ensures that only installed packages are reinstalled
+    def install(self, package_list, load_only=False, if_installed='exit'):
+        assert(if_installed in ['exit', 'skip', 'reinstall'])
         for (meta_package_name, package_regex) in package_list:
             file_path = self._find_meta_package_by_name(meta_package_name)
             if file_path is None:
                 raise Exception('Module {} not loaded'.format(meta_package_name))
 
             meta_package = toml.load(file_path)
-            packages = [(x, meta_package['packages'][x])
+            raw_packages = [(x, meta_package['packages'][x])
                     for x in meta_package['packages'].keys()
                     if re.match(package_regex, x)]
 
+            packages = []
             # Ensure the packages are not installed already
-            for (package_name, _) in packages:
+            for (package_name, package) in raw_packages:
                 status = self._get_package_cache(meta_package_name, package_name)['status']
 
                 if status in ['midinstall', 'midremove']:
                     raise Exception('Package {}.{} marked as {} - unless another mcm instance is running, the cache has been corrupted.  Run mcm cache-fix to repair.'.format(meta_package_name, package_name, status))
 
-                if status == 'installed' and exit_if_installed:
-                    raise Exception('Package {}.{} already installed.'.format(meta_package_name, package_name, status))
+                if status == 'installed':
+                    if if_installed == 'exit':
+                        raise Exception('Package {}.{} already installed.'.format(meta_package_name, package_name, status))
+                    elif if_installed == 'reinstall':
+                        packages.append((package_name, package,))
+
+                # not installed
+                if status in ['notloaded', 'loaded']:
+                    if if_installed != 'reinstall':
+                        packages.append((package_name, package,))
 
             # Resolve package dependencies
             for (package_name, package) in packages:
@@ -259,22 +331,42 @@ class Mcm():
 
                 dep_package_list = [(x['meta-package'], x['package-regex'])
                         for x in dependencies]
-                self.install(dep_package_list, load_only=load_only)
+                self.install(dep_package_list, load_only=load_only, if_installed='skip')
                     
             # Load the packages
             for (package_name, package) in packages:
                 status = self._get_package_cache(meta_package_name, package_name)['status']
                 joined_package_name = meta_package_name + '.' + package_name
                 package_dir = os.path.join(self.mcm_package_packages_dir, joined_package_name)
+
+                # Get the target directory
+                try:
+                    target_dirs = package['target']
+                except KeyError:
+                    target_dir = self.target_dir
+                else:
+                    # Find the first existant target_dir
+                    found = False
+                    for t in target_dirs:
+                        target_dir = os.path.abspath(os.path.expandvars(t))
+                        if os.path.isdir(target_dir):
+                            found = True
+                            break
+                    if not found:
+                        raise Exception("No valid target dir found for package {}.{}".format(meta_package_name, package_name))
+
                 if status == 'notloaded':
                     logging.info('Loading package {}.{}'
                             .format(meta_package_name, package_name))
 
                     # Find the installation mechanism, according to the preferred order
                     possible_installation_mechanisms = []
-                    installation_mechanisms = package['installation-mechanisms']
+                    try:
+                        installation_mechanisms = package['installation-mechanisms']
+                    except KeyError:
+                        raise Exception('Meta-package {} has no installation mechanisms'.format(meta_package_name))
                     if installation_mechanisms == []:
-                        raise Exception('Meta-package {} has no installation mechanisms')
+                        raise Exception('Meta-package {} has no installation mechanisms'.format(meta_package_name))
 
                     loaded = False
                     for name, val in installation_mechanisms.items():
@@ -326,43 +418,18 @@ class Mcm():
                             .format(meta_package_name, package_name))
 
                 # Install the package
-                with open(self.mcm_cache_file, 'r') as f:
-                    cache = json.load(f)
-                try:
-                    cache[meta_package_name]
-                except KeyError:
-                    cache[meta_package_name] = {'packages': {}}
-
                 if not load_only:
-                    # Update the cache
-                    package_cache = {
-                        'status': 'midinstall',
-                        'target_dir': str(self.target_dir),
-                        'package_dir': str(package_dir)
-                    }
-                    cache[meta_package_name]['packages'][package_name] = package_cache
-
-                    with open(self.mcm_cache_file, 'w+') as f:
-                        json.dump(cache, f)
-
                     # Install the package with scm
-                    self._invoke_scm_install([(meta_package_name, package_name)])
-
-                    # Update the packages cache
-                    package_cache = {
-                        'status': 'installed',
-                        'target_dir': str(self.target_dir),
-                        'package_dir': str(package_dir),
-                        'tags': self.tags
-                    }
-                    cache[meta_package_name]['packages'][package_name] = package_cache
-
-                    if self.hostname is not None:
-                        package_cache['hostname'] = self.hostname
-
-                    with open(self.mcm_cache_file, 'w') as f:
-                            json.dump(cache, f)
+                    self._invoke_scm_install(meta_package_name, package_name, target_dir, get_attributes_from_cache=(if_installed == 'reinstall'))
                 else:
+                    # Read the cache
+                    with open(self.mcm_cache_file, 'r') as f:
+                        cache = json.load(f)
+                    try:
+                        cache[meta_package_name]
+                    except KeyError:
+                        cache[meta_package_name] = {'packages': {}}
+
                     # Update the cache to loaded
                     package_cache = {
                         'status': 'loaded'
@@ -373,9 +440,9 @@ class Mcm():
                         json.dump(cache, f)
 
                 
-	# if package_must_exist, will raise an exception if any specified
+	# if exit_if_not_installed, will raise an exception if any specified
 	# package in package_list does not exist
-    def remove(self, package_list, uninstall_only=False, package_must_exist=True):
+    def remove(self, package_list, uninstall_only=False, exit_if_not_installed=True):
         for (meta_package_name, package_regex) in package_list:
             file_path = self._find_meta_package_by_name(meta_package_name)
             if file_path is None:
@@ -393,7 +460,7 @@ class Mcm():
                     raise Exception('Package {}.{} marked as {} - unless another mcm instance is running, the cache has been corrupted.  Run mcm cache-fix to repair.'.format(meta_package_name, package_name, status))
 
                 if status in ['notloaded', 'loaded']:
-                    if package_must_exist:
+                    if exit_if_not_installed:
                         raise Exception('Package {}.{} already not installed.'.format(meta_package_name, package_name, status))
                     else:
                         continue
@@ -416,8 +483,27 @@ class Mcm():
                     with open(self.mcm_cache_file, 'w') as f:
                         cache = json.dump(cache, f)
 
-    def update(self, package_list, all_packages=False):
-        raise NotImplementedError()
+    # Find all installed packages and re-install them
+    def update(self, package_list):
+        def update_meta_package(meta_package_name):
+            logging.info("Updating meta-package {}".format(meta_package_name))
+            uri = self._get_meta_package_by_name(meta_package_name)['uri']
+            self.load(uri, skip_if_loaded=False)
+
+        packages = self.list_packages(pretty_print=False)
+        if len(package_list) == 0:
+            # Update all packages
+            for meta_package_name in packages.keys():
+                update_meta_package(meta_package_name)
+                self.install([(meta_package_name, '.*')], if_installed='reinstall')
+        else:
+            for (meta_package_name, package_regex) in package_list:
+                if package_regex == None:
+                    # Update just the meta-package
+                    update_meta_package(meta_package_name)
+                else:
+                    # Update just the packages
+                    self.install([(meta_package_name, '.*')], if_installed='reinstall')
 
     def list_packages(self, pretty_print=True):
         # Locate all loaded meta-packages
@@ -472,7 +558,7 @@ class Mcm():
                         print("    {}".format(package_name))
 
                     for k, v in package_cache.items():
-                        if k in ['package_dir']:
+                        if k in ['package_dir', 'packages_dir']:
                             continue
                         print("        {}: {}".format(k, v))
         else:
@@ -519,11 +605,10 @@ if __name__ == '__main__':
             help='The meta-package and the desired package, in the format meta-package.package')
     parser_remove.set_defaults(func='remove')
 
-    parser_update = subparsers.add_parser('update', help='Updates installed packages')
-    parser_update.add_argument('-a, --all', action='store_true', help='Update all installed packages', dest='all_packages')
-    parser_update.add_argument('package', metavar='META_PACKAGE.PACKAGE', type=str,
-            nargs='+', default=[],
-            help='The meta-package and the desired package, in the format meta-package.package')
+    parser_update = subparsers.add_parser('update', help='Updates installed packages.  If no arguments are supplied, updates all loaded meta-packages and all installed packages.  If only a meta-package is supplied, updates that meta-package.  If a meta-package.package is supplied, updates that package.')
+    parser_update.add_argument('update_package', metavar='META_PACKAGE[.PACKAGE]', type=str,
+            nargs='*', default=[],
+            help='The meta-package and the desired package, in the format meta-package[.package]')
     parser_update.set_defaults(func='update')
 
     parser_list = subparsers.add_parser('list', help='Lists all installed and non-installed packages from all loaded meta-packages')
@@ -543,8 +628,26 @@ if __name__ == '__main__':
         parser.print_help(sys.stderr)
         sys.exit(1)
 
+    def _tupleise(arg):
+        t = arg.split('.', 1)
+        if len(t) != 2:
+            raise Exception("Must supply fully qualified package name i.e. META-PACKAGE.PACKAGE")
+        return tuple(t)
+
+    def _update_tupleise(arg):
+        t = arg.split('.', 1)
+        if len(t) < 2:
+            t.append(None)
+        assert(len(t) == 2)
+        return tuple(t)
+
     try:
-        package_list = [tuple(x.split('.', 1)) for x in args.package] 
+        package_list = [_tupleise(x) for x in args.package] 
+    except AttributeError:
+        pass
+
+    try:
+        update_package_list = [_update_tupleise(x) for x in args.update_package]
     except AttributeError:
         pass
 
@@ -557,8 +660,6 @@ if __name__ == '__main__':
     elif args.func == 'remove':
         mcm.remove(package_list)
     elif args.func == 'update':
-        mcm.update(package_list, args.all_packages)
+        mcm.update(update_package_list)
     elif args.func == 'list_packages':
         mcm.list_packages()
-
-    #args.func(args)
