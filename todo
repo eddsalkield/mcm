@@ -4,3 +4,5 @@ optimisation: install doesn't have to load if already loaded, unless it's an upd
 list should display package versions
 update should display a warning if the newly loaded package does not have a newer version
 readline support
+
+Adding files to packages, generating new releases of them
