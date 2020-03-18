@@ -1,13 +1,5 @@
-Create JSON schema for package config file
-Installing creates a json file specifying which tags were installed, to later update
-Update meta-package - updates the meta-package config
-Update meta-package.package - updates the specific package
-Update meta-package.* - updates all packages in the meta-package
-Update - updates all meta-packages
-
 Cache is not safe if multiple mcms use it at the same time
 unload removes its packages entry from the cache
-
 optimisation: install doesn't have to load if already loaded, unless it's an update
 list should display package versions
 update should display a warning if the newly loaded package does not have a newer version

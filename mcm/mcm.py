@@ -12,7 +12,8 @@ from urllib.parse import urlparse
 import subprocess
 import io
 import re
-import pprint
+import importlib.resources as pkg_resources
+from . import static
 
 try:
     import git
@@ -65,7 +66,8 @@ class Mcm():
                 json.dump(cache, f)
 
         # Load meta-package config schema
-        with open(config_schema_path, 'r') as f:
+        #with open(config_schema_path, 'r') as f:
+        with pkg_resources.open_text(static, config_schema_path) as f:
             self.meta_package_config_schema = json.load(f)
         jsonschema.Draft7Validator.check_schema(self.meta_package_config_schema)
 
@@ -564,7 +566,7 @@ class Mcm():
         else:
             return meta_packages
 
-if __name__ == '__main__':
+def main():
     default_mcm_dir = os.path.join(xdg.XDG_DATA_HOME, 'mcm2')
 
     parser = argparse.ArgumentParser(description='Meta configuration manager for scm.')
