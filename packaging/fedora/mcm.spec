@@ -1,7 +1,7 @@
 Summary: Meta-configuration manager, for scm
 Name: mcm
-Version: 0.0.1
-Release: 1%{?dist}
+Version: 0.0.2
+Release: 2%{?dist}
 Source0: mcm-%{version}.tar.gz
 License: UNKNOWN
 

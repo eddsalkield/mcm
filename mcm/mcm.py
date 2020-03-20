@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 import argparse
-import xdg
+from xdg import BaseDirectory
 import os
 import pathlib
 import logging
@@ -18,16 +18,6 @@ from . import static
 USING_GIT = shutil.which('git') is not None
 
 try:
-    import git
-except ImportError:
-   USING_GIT = False
-else:
-    # Ensure git is installed
-    if shutil.which('git') is None:
-        raise Exception('gitpython installed but git not installed')
-    USING_GIT = True
-
-try:
     import tarfile
 except ImportError:
     USING_TARFILE = False
@@ -39,9 +29,9 @@ if shutil.which('scm') is None:
 class Mcm():
     def __init__(self, mcm_dir=None, target_dir=None, hostname=None, tags=None, config_schema_path='meta_package_config_schema.json', cache_dir=None):
         if mcm_dir is None:
-            mcm_dir = os.path.join(xdg.XDG_DATA_HOME, 'mcm2')
+            mcm_dir = os.path.join(BaseDirectory.xdg_data_home, 'mcm2')
         if cache_dir is None:
-            cache_dir = os.path.join(xdg.XDG_CACHE_HOME, 'mcm')
+            cache_dir = os.path.join(BaseDirectory.xdg_cache_home, 'mcm')
         if target_dir is None:
             target_dir = target_dir=pathlib.Path.home()
         if tags is None:
@@ -354,12 +344,13 @@ class Mcm():
                     found = False
                     for t in target_dirs:
                         print(t)
-                        target_dir = os.path.abspath(os.path.expandvars(t))
+                        target_dir = pathlib.Path(os.path.abspath(os.path.expandvars(t)))
                         if os.path.isdir(target_dir):
                             found = True
                             break
                     if not found:
-                        raise Exception("No valid target dir found for package {}.{}".format(meta_package_name, package_name))
+                        logging.debug(f"No valid target dir found for package{meta_package_name}.{package_name}.  Creating...")
+                        pathlib.Path.mkdir(target_dir)
 
                 if status == 'notloaded':
                     logging.info('Loading package {}.{}'
@@ -417,7 +408,7 @@ class Mcm():
                         if possible_installation_mechanisms == []:
                             raise Exception('Meta-package could not be loaded: no valid installation mechanisms of: {}'.format(installation_mechanisms))
                         else:
-                            raise Exception('Meta-package could not be loaded, but uses the following valid installation mechanisms: {}'.format(possible_installation_mechanisms))
+                            raise Exception(f"Package {meta_package_name}.{package_name} could not be loaded - none of its installation mechanisms are available on the system.  Consider installing one of the following: {possible_installation_mechanisms}")
 
                 else:
                     logging.info('Package {}.{} already loaded'
@@ -571,7 +562,7 @@ class Mcm():
             return meta_packages
 
 def main():
-    default_mcm_dir = os.path.join(xdg.XDG_DATA_HOME, 'mcm2')
+    default_mcm_dir = os.path.join(BaseDirectory.xdg_data_home, 'mcm2')
 
     parser = argparse.ArgumentParser(description='Meta configuration manager for scm.')
     parser.add_argument('-v', '--verbose', action='count', default=0, dest='verbose')
