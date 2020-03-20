@@ -6,3 +6,4 @@ update should display a warning if the newly loaded package does not have a newe
 readline support
 
 Adding files to packages, generating new releases of them
+mcm list draws dependencies between files

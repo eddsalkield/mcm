@@ -15,15 +15,17 @@ import re
 import importlib.resources as pkg_resources
 from . import static
 
+USING_GIT = shutil.which('git') is not None
+
 try:
     import git
 except ImportError:
-   USING_GITPYTHON = False
+   USING_GIT = False
 else:
     # Ensure git is installed
     if shutil.which('git') is None:
         raise Exception('gitpython installed but git not installed')
-    USING_GITPYTHON = True
+    USING_GIT = True
 
 try:
     import tarfile
@@ -263,7 +265,8 @@ class Mcm():
             jsonschema.validate(meta_package_config, self.meta_package_config_schema)
 
             # Remove the old file, if it exists
-            os.remove(file_path)
+            if file_path is not None:
+                os.remove(file_path)
 
             # Save new file
             with open(new_file_path, 'wb') as out_file:
@@ -339,7 +342,7 @@ class Mcm():
             for (package_name, package) in packages:
                 status = self._get_package_cache(meta_package_name, package_name)['status']
                 joined_package_name = meta_package_name + '.' + package_name
-                package_dir = os.path.join(self.mcm_package_packages_dir, joined_package_name)
+                package_dir = pathlib.Path(os.path.join(self.mcm_package_packages_dir, joined_package_name))
 
                 # Get the target directory
                 try:
@@ -350,6 +353,7 @@ class Mcm():
                     # Find the first existant target_dir
                     found = False
                     for t in target_dirs:
+                        print(t)
                         target_dir = os.path.abspath(os.path.expandvars(t))
                         if os.path.isdir(target_dir):
                             found = True
@@ -373,7 +377,7 @@ class Mcm():
                     loaded = False
                     for name, val in installation_mechanisms.items():
                         if name == 'git':
-                            if not USING_GITPYTHON:
+                            if not USING_GIT:
                                 possible_installation_mechanisms.append('git')
                             else:
                                 logging.debug('Installing package {}.{} with git'
@@ -381,7 +385,7 @@ class Mcm():
 
                                 # Download using git
                                 uri = val['uri']
-                                git.Git(package_dir).clone(uri)
+                                subprocess.run(['git', 'clone', str(uri), str(package_dir)], check=True)
                                 loaded = True
 
                         elif name == 'tar':
@@ -457,7 +461,7 @@ class Mcm():
 
             # Ensure the packages are installed already
             for (package_name, _) in packages:
-                status = self._get_package_cache(meta_package_name, package_regex)['status']
+                status = self._get_package_cache(meta_package_name, package_name)['status']
                 if status in ['midinstall', 'midremove']:
                     raise Exception('Package {}.{} marked as {} - unless another mcm instance is running, the cache has been corrupted.  Run mcm cache-fix to repair.'.format(meta_package_name, package_name, status))
 

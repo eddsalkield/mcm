@@ -1,2 +1,8 @@
 __pycache__
 dist
+*.tar.gz
+*.rpm
+*/noarch
+*/mcm-*
+*.log
+*packaging/fedora/mcm-*

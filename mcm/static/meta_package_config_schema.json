@@ -40,6 +40,10 @@
 				},
 				"installation_mechanisms": {
 					"$ref": "#/definitions/installation_mechanisms"
+				},
+				"target": {
+					"type": "array",
+					"items": { "type": "string" }
 				}
 			}
 		}

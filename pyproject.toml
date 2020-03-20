@@ -8,8 +8,6 @@ authors = ["Edd Salkield <edd@salkield.uk>"]
 python = "^3.7"
 xdg = "^4.0.1"
 toml = "^0.10.0"
-argparse = "^1.4.0"
-pathlib = "^1.0.1"
 jsonschema = "^3.2.0"
 
 [tool.poetry.dev-dependencies]
